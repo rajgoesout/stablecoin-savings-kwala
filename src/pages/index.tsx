@@ -1,83 +1,279 @@
 import { ConnectButton } from '@rainbow-me/rainbowkit';
 import type { NextPage } from 'next';
 import Head from 'next/head';
-import styles from '../styles/Home.module.css';
+import Link from 'next/link';
+import { FormEvent, useMemo, useState } from 'react';
+import { formatUnits, parseUnits } from 'viem';
+import {
+  useAccount,
+  usePublicClient,
+  useReadContract,
+  useSwitchChain,
+  useWriteContract,
+} from 'wagmi';
+
+import {
+  erc20Abi,
+  NAIRA_TOKEN_ADDRESS,
+  TARGET_CHAIN_ID,
+  TREASURY_VAULT_ADDRESS,
+} from '../lib/contracts';
+import styles from '../styles/App.module.css';
+
+const formatAmount = (value: bigint | undefined, decimals: number, precision = 2) => {
+  if (value === undefined) return '--';
+  const asNum = Number(formatUnits(value, decimals));
+  if (!Number.isFinite(asNum)) return '--';
+  return asNum.toLocaleString(undefined, {
+    minimumFractionDigits: 0,
+    maximumFractionDigits: precision,
+  });
+};
 
 const Home: NextPage = () => {
+  const [amountInput, setAmountInput] = useState('');
+  const [statusText, setStatusText] = useState('Ready to deposit into TreasuryVault.');
+
+  const { address, chainId, isConnected } = useAccount();
+  const isWrongNetwork = isConnected && chainId !== TARGET_CHAIN_ID;
+
+  const { switchChain, isPending: isSwitching } = useSwitchChain();
+
+  const publicClient = usePublicClient({ chainId: TARGET_CHAIN_ID });
+  const { isPending: isWriting, writeContractAsync } = useWriteContract();
+
+  const tokenConfigReady = Boolean(NAIRA_TOKEN_ADDRESS && TREASURY_VAULT_ADDRESS);
+
+  const { data: tokenDecimalsData } = useReadContract({
+    abi: erc20Abi,
+    address: NAIRA_TOKEN_ADDRESS,
+    functionName: 'decimals',
+    chainId,
+    query: {
+      enabled: Boolean(NAIRA_TOKEN_ADDRESS && chainId),
+    },
+  });
+
+  const tokenDecimals = Number(tokenDecimalsData ?? 18);
+
+  const { data: tokenSymbolData } = useReadContract({
+    abi: erc20Abi,
+    address: NAIRA_TOKEN_ADDRESS,
+    functionName: 'symbol',
+    chainId,
+    query: {
+      enabled: Boolean(NAIRA_TOKEN_ADDRESS && chainId),
+    },
+  });
+
+  const tokenSymbol = tokenSymbolData ?? 'NAIRA';
+
+  const { data: balanceData, refetch: refetchBalance } = useReadContract({
+    abi: erc20Abi,
+    address: NAIRA_TOKEN_ADDRESS,
+    functionName: 'balanceOf',
+    args: address ? [address] : undefined,
+    chainId,
+    query: {
+      enabled: Boolean(NAIRA_TOKEN_ADDRESS && address && chainId),
+    },
+  });
+
+  const { data: allowanceData, refetch: refetchAllowance } = useReadContract({
+    abi: erc20Abi,
+    address: NAIRA_TOKEN_ADDRESS,
+    functionName: 'allowance',
+    args:
+      address && TREASURY_VAULT_ADDRESS
+        ? [address, TREASURY_VAULT_ADDRESS]
+        : undefined,
+    chainId,
+    query: {
+      enabled: Boolean(NAIRA_TOKEN_ADDRESS && TREASURY_VAULT_ADDRESS && address && chainId),
+    },
+  });
+
+  const parsedAmount = useMemo(() => {
+    try {
+      if (!amountInput || Number(amountInput) <= 0) return undefined;
+      return parseUnits(amountInput, tokenDecimals);
+    } catch {
+      return undefined;
+    }
+  }, [amountInput, tokenDecimals]);
+
+  const hasEnoughBalance =
+    parsedAmount !== undefined && balanceData !== undefined
+      ? balanceData >= parsedAmount
+      : false;
+
+  const needsApproval =
+    parsedAmount !== undefined && allowanceData !== undefined
+      ? allowanceData < parsedAmount
+      : true;
+
+  const isBusy = isWriting || isSwitching;
+
+  const canSubmit =
+    tokenConfigReady &&
+    isConnected &&
+    !isWrongNetwork &&
+    !isBusy &&
+    Boolean(publicClient) &&
+    parsedAmount !== undefined &&
+    hasEnoughBalance;
+
+  const onDeposit = async (event: FormEvent) => {
+    event.preventDefault();
+
+    if (
+      !canSubmit ||
+      !parsedAmount ||
+      !NAIRA_TOKEN_ADDRESS ||
+      !TREASURY_VAULT_ADDRESS ||
+      !publicClient
+    ) {
+      return;
+    }
+
+    try {
+      if (needsApproval) {
+        setStatusText('Approve NAIRA spending in your wallet...');
+        const approveHash = await writeContractAsync({
+          abi: erc20Abi,
+          address: NAIRA_TOKEN_ADDRESS,
+          functionName: 'approve',
+          args: [TREASURY_VAULT_ADDRESS, parsedAmount],
+        });
+        setStatusText(`Approval submitted: ${approveHash.slice(0, 10)}... confirming.`);
+        await publicClient.waitForTransactionReceipt({ hash: approveHash });
+        await refetchAllowance();
+      }
+
+      setStatusText('Confirm deposit transaction in wallet...');
+      const depositHash = await writeContractAsync({
+        abi: [
+          {
+            type: 'function',
+            name: 'deposit',
+            stateMutability: 'nonpayable',
+            inputs: [{ name: 'amount', type: 'uint256' }],
+            outputs: [],
+          },
+        ],
+        address: TREASURY_VAULT_ADDRESS,
+        functionName: 'deposit',
+        args: [parsedAmount],
+      });
+
+      setStatusText(`Deposit submitted: ${depositHash.slice(0, 10)}... waiting for confirmation.`);
+      await publicClient.waitForTransactionReceipt({ hash: depositHash });
+      await refetchAllowance();
+      await refetchBalance();
+      setAmountInput('');
+      setStatusText('Deposit confirmed successfully.');
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Transaction failed.';
+      setStatusText(message);
+    }
+  };
+
   return (
-    <div className={styles.container}>
+    <div className={styles.pageWrap}>
       <Head>
-        <title>RainbowKit App</title>
+        <title>Kwala AutoSave | Deposit</title>
         <meta
-          content="Generated by @rainbow-me/create-rainbowkit"
+          content="Deposit NAIRA into TreasuryVault and track your stablecoin savings position."
           name="description"
         />
-        <link href="/favicon.ico" rel="icon" />
       </Head>
 
-      <main className={styles.main}>
-        <ConnectButton />
+      <main className={styles.layout}>
+        <header className={styles.topBar}>
+          <div>
+            <p className={styles.brandLabel}>Kwala</p>
+            <h1 className={styles.pageTitle}>AutoSave Deposit</h1>
+            <p className={styles.pageSubtitle}>Deposit NAIRA, backend handles conversion + Aave supply.</p>
+          </div>
+          <div className={styles.topBarActions}>
+            <Link className={styles.secondaryLink} href="/position">
+              Position Tracking
+            </Link>
+            <ConnectButton />
+          </div>
+        </header>
 
-        <h1 className={styles.title}>
-          Welcome to <a href="https://www.rainbowkit.com">RainbowKit</a> +{' '}
-          <a href="https://wagmi.sh">wagmi</a> +{' '}
-          <a href="https://nextjs.org">Next.js!</a>
-        </h1>
+        <section className={styles.card}>
+          <div className={styles.sectionHeader}>
+            <h2>Deposit NAIRA</h2>
+            <p>Network: {TARGET_CHAIN_ID}</p>
+          </div>
 
-        <p className={styles.description}>
-          Get started by editing{' '}
-          <code className={styles.code}>pages/index.tsx</code>
-        </p>
-
-        <div className={styles.grid}>
-          <a className={styles.card} href="https://rainbowkit.com">
-            <h2>RainbowKit Documentation &rarr;</h2>
-            <p>Learn how to customize your wallet connection flow.</p>
-          </a>
-
-          <a className={styles.card} href="https://wagmi.sh">
-            <h2>wagmi Documentation &rarr;</h2>
-            <p>Learn how to interact with Ethereum.</p>
-          </a>
-
-          <a
-            className={styles.card}
-            href="https://github.com/rainbow-me/rainbowkit/tree/main/examples"
-          >
-            <h2>RainbowKit Examples &rarr;</h2>
-            <p>Discover boilerplate example RainbowKit projects.</p>
-          </a>
-
-          <a className={styles.card} href="https://nextjs.org/docs">
-            <h2>Next.js Documentation &rarr;</h2>
-            <p>Find in-depth information about Next.js features and API.</p>
-          </a>
-
-          <a
-            className={styles.card}
-            href="https://github.com/vercel/next.js/tree/canary/examples"
-          >
-            <h2>Next.js Examples &rarr;</h2>
-            <p>Discover and deploy boilerplate example Next.js projects.</p>
-          </a>
-
-          <a
-            className={styles.card}
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=default-template&utm_campaign=create-next-app"
-          >
-            <h2>Deploy &rarr;</h2>
-            <p>
-              Instantly deploy your Next.js site to a public URL with Vercel.
+          {!tokenConfigReady && (
+            <p className={styles.warningText}>
+              Set `NEXT_PUBLIC_NAIRA_TOKEN_ADDRESS` and `NEXT_PUBLIC_TREASURY_VAULT_ADDRESS` in env.
             </p>
-          </a>
-        </div>
-      </main>
+          )}
+          {isWrongNetwork && (
+            <div className={styles.warningBox}>
+              <p>Wrong network connected. Switch to chain id {TARGET_CHAIN_ID}.</p>
+              <button
+                className={styles.secondaryButton}
+                onClick={() => switchChain({ chainId: TARGET_CHAIN_ID })}
+                type="button"
+              >
+                Switch Network
+              </button>
+            </div>
+          )}
 
-      <footer className={styles.footer}>
-        <a href="https://rainbow.me" rel="noopener noreferrer" target="_blank">
-          Made with ❤️ by your frens at 🌈
-        </a>
-      </footer>
+          <form className={styles.depositForm} onSubmit={onDeposit}>
+            <label className={styles.fieldLabel} htmlFor="amount">
+              Amount ({tokenSymbol})
+            </label>
+            <input
+              className={styles.amountInput}
+              id="amount"
+              inputMode="decimal"
+              min="0"
+              onChange={(e) => setAmountInput(e.target.value)}
+              placeholder="0.00"
+              step="any"
+              type="number"
+              value={amountInput}
+            />
+
+            <div className={styles.metricsRow}>
+              <span>Wallet balance (selected network)</span>
+              <strong>{formatAmount(balanceData, tokenDecimals)} {tokenSymbol}</strong>
+            </div>
+            <div className={styles.metricsRow}>
+              <span>Current allowance</span>
+              <strong>{formatAmount(allowanceData, tokenDecimals)} {tokenSymbol}</strong>
+            </div>
+
+            <div className={styles.flowRow}>
+              <span>{tokenSymbol}</span>
+              <span>Vault</span>
+              <span>Lending</span>
+            </div>
+
+            <button className={styles.primaryButton} disabled={!canSubmit} type="submit">
+              {isBusy ? 'Processing...' : needsApproval ? 'Approve & Deposit' : 'Deposit'}
+            </button>
+
+            <button className={styles.disabledButton} disabled type="button">
+              Withdraw (Disabled)
+            </button>
+
+            {parsedAmount !== undefined && !hasEnoughBalance && (
+              <p className={styles.warningText}>Insufficient wallet balance for this deposit.</p>
+            )}
+
+            <p className={styles.statusText}>{statusText}</p>
+          </form>
+        </section>
+      </main>
     </div>
   );
 };
