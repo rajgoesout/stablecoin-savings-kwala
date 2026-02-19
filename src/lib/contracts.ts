@@ -9,6 +9,8 @@ const rawAavePoolAddress = process.env.NEXT_PUBLIC_AAVE_POOL_ADDRESS;
 export const TARGET_CHAIN_ID = Number(
   process.env.NEXT_PUBLIC_TARGET_CHAIN_ID ?? sepolia.id,
 );
+export const USE_MOCK_AAVE =
+  process.env.NEXT_PUBLIC_USE_MOCK_AAVE === 'true';
 
 export const VAULT_DEPLOY_BLOCK = BigInt(
   process.env.NEXT_PUBLIC_VAULT_DEPLOY_BLOCK ?? 0,
@@ -139,5 +141,30 @@ export const aavePoolAbi = [
         ],
       },
     ],
+  },
+] as const;
+
+export const mockAavePoolAbi = [
+  {
+    type: 'function',
+    name: 'getPosition',
+    stateMutability: 'view',
+    inputs: [
+      { name: 'asset', type: 'address' },
+      { name: 'user', type: 'address' },
+    ],
+    outputs: [
+      { name: 'principal', type: 'uint256' },
+      { name: 'currentBalance', type: 'uint256' },
+      { name: 'currentYield', type: 'uint256' },
+      { name: 'lastAccruedAt', type: 'uint64' },
+    ],
+  },
+  {
+    type: 'function',
+    name: 'getMockAprBps',
+    stateMutability: 'view',
+    inputs: [],
+    outputs: [{ name: '', type: 'uint256' }],
   },
 ] as const;

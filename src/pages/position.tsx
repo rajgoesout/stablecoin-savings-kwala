@@ -10,12 +10,14 @@ import {
   AAVE_POOL_ADDRESS,
   aavePoolAbi,
   erc20Abi,
+  mockAavePoolAbi,
   NAIRA_PER_USDC,
   NAIRA_TOKEN_ADDRESS,
   TARGET_CHAIN_ID,
   TREASURY_VAULT_ADDRESS,
   treasuryVaultAbi,
   USDC_TOKEN_ADDRESS,
+  USE_MOCK_AAVE,
   VAULT_DEPLOY_BLOCK,
 } from '../lib/contracts';
 import styles from '../styles/App.module.css';
@@ -74,7 +76,7 @@ const Position: NextPage = () => {
     args: USDC_TOKEN_ADDRESS ? [USDC_TOKEN_ADDRESS] : undefined,
     chainId: TARGET_CHAIN_ID,
     query: {
-      enabled: Boolean(AAVE_POOL_ADDRESS && USDC_TOKEN_ADDRESS),
+      enabled: Boolean(AAVE_POOL_ADDRESS && USDC_TOKEN_ADDRESS && !USE_MOCK_AAVE),
     },
   });
 
@@ -87,7 +89,28 @@ const Position: NextPage = () => {
     args: address ? [address] : undefined,
     chainId: TARGET_CHAIN_ID,
     query: {
-      enabled: Boolean(aTokenAddress && address),
+      enabled: Boolean(aTokenAddress && address && !USE_MOCK_AAVE),
+    },
+  });
+
+  const { data: mockPosition } = useReadContract({
+    abi: mockAavePoolAbi,
+    address: AAVE_POOL_ADDRESS,
+    functionName: 'getPosition',
+    args: USDC_TOKEN_ADDRESS && address ? [USDC_TOKEN_ADDRESS, address] : undefined,
+    chainId: TARGET_CHAIN_ID,
+    query: {
+      enabled: Boolean(USE_MOCK_AAVE && AAVE_POOL_ADDRESS && USDC_TOKEN_ADDRESS && address),
+    },
+  });
+
+  const { data: mockAprBps } = useReadContract({
+    abi: mockAavePoolAbi,
+    address: AAVE_POOL_ADDRESS,
+    functionName: 'getMockAprBps',
+    chainId: TARGET_CHAIN_ID,
+    query: {
+      enabled: Boolean(USE_MOCK_AAVE && AAVE_POOL_ADDRESS),
     },
   });
 
@@ -200,17 +223,27 @@ const Position: NextPage = () => {
     [activities],
   );
 
-  const principalUsdc = useMemo(
+  const suppliedPrincipalUsdc = useMemo(
     () => supplies.reduce((sum, row) => sum + row.amount, BigInt(0)),
     [supplies],
   );
-  const currentUsdcBalance = aTokenBalance ?? BigInt(0);
-  const yieldUsdc =
-    currentUsdcBalance > principalUsdc ? currentUsdcBalance - principalUsdc : BigInt(0);
+  const principalUsdc = USE_MOCK_AAVE
+    ? (mockPosition?.[0] ?? BigInt(0))
+    : suppliedPrincipalUsdc;
+  const currentUsdcBalance = USE_MOCK_AAVE
+    ? (mockPosition?.[1] ?? BigInt(0))
+    : (aTokenBalance ?? BigInt(0));
+  const yieldUsdc = USE_MOCK_AAVE
+    ? (mockPosition?.[2] ?? BigInt(0))
+    : currentUsdcBalance > principalUsdc
+      ? currentUsdcBalance - principalUsdc
+      : BigInt(0);
 
   const totalBalanceNaira = currentUsdcBalance * NAIRA_PER_USDC;
   const yieldNaira = yieldUsdc * NAIRA_PER_USDC;
-  const aprPercent = Number(reserveData?.currentLiquidityRate ?? BigInt(0)) / 1e25;
+  const aprPercent = USE_MOCK_AAVE
+    ? Number(mockAprBps ?? BigInt(0)) / 100
+    : Number(reserveData?.currentLiquidityRate ?? BigInt(0)) / 1e25;
 
   return (
     <div className={styles.pageWrap}>
@@ -224,7 +257,11 @@ const Position: NextPage = () => {
           <div>
             <p className={styles.brandLabel}>Kwala</p>
             <h1 className={styles.pageTitle}>My Position</h1>
-            <p className={styles.pageSubtitle}>Balances are live from Aave + on-chain events.</p>
+            <p className={styles.pageSubtitle}>
+              {USE_MOCK_AAVE
+                ? 'Balances are from MockAavePool + on-chain events.'
+                : 'Balances are live from Aave + on-chain events.'}
+            </p>
           </div>
           <div className={styles.topBarActions}>
             <Link className={styles.secondaryLink} href="/">
@@ -268,11 +305,11 @@ const Position: NextPage = () => {
               </strong>
             </div>
             <div className={styles.metricsRow}>
-              <span>APR (Aave Live)</span>
+              <span>{USE_MOCK_AAVE ? 'APR (Mock)' : 'APR (Aave Live)'}</span>
               <strong>{formatNumber(aprPercent, 2)}%</strong>
             </div>
             <div className={styles.metricsRow}>
-              <span>Aave Balance (USDC)</span>
+              <span>{USE_MOCK_AAVE ? 'Mock Pool Balance (USDC)' : 'Aave Balance (USDC)'}</span>
               <strong>{formatNumber(Number(formatUnits(currentUsdcBalance, USDC_DECIMALS)))} USDC</strong>
             </div>
           </div>
