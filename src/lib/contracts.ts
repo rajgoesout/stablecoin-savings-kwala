@@ -93,6 +93,13 @@ export const treasuryVaultAbi = [
     outputs: [],
   },
   {
+    type: 'function',
+    name: 'pendingNaira',
+    stateMutability: 'view',
+    inputs: [{ name: '', type: 'address' }],
+    outputs: [{ name: '', type: 'uint256' }],
+  },
+  {
     type: 'event',
     name: 'FundsReceived',
     anonymous: false,

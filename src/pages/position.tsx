@@ -1,6 +1,7 @@
 import { ConnectButton } from '@rainbow-me/rainbowkit';
 import type { NextPage } from 'next';
 import Head from 'next/head';
+import Image from 'next/image';
 import Link from 'next/link';
 import { useEffect, useMemo, useState } from 'react';
 import { formatUnits } from 'viem';
@@ -32,7 +33,6 @@ type SupplyActivity = {
   amount: bigint;
 };
 
-const USDC_DECIMALS = 6;
 const NAIRA_DECIMALS = 6;
 
 const formatNumber = (value: number, precision = 2) =>
@@ -45,6 +45,7 @@ const Position: NextPage = () => {
   const [activities, setActivities] = useState<DepositActivity[]>([]);
   const [supplies, setSupplies] = useState<SupplyActivity[]>([]);
   const [isLoadingActivity, setIsLoadingActivity] = useState(false);
+  const [hasInitialSync, setHasInitialSync] = useState(false);
   const [lastSyncedBlock, setLastSyncedBlock] = useState<bigint | null>(null);
 
   const { address, chainId, isConnected } = useAccount();
@@ -68,6 +69,17 @@ const Position: NextPage = () => {
   });
 
   const tokenSymbol = tokenSymbolData ?? 'NAIRA';
+
+  const { data: pendingNairaData } = useReadContract({
+    abi: treasuryVaultAbi,
+    address: TREASURY_VAULT_ADDRESS,
+    functionName: 'pendingNaira',
+    args: address ? [address] : undefined,
+    chainId: TARGET_CHAIN_ID,
+    query: {
+      enabled: Boolean(TREASURY_VAULT_ADDRESS && address),
+    },
+  });
 
   const { data: reserveData } = useReadContract({
     abi: aavePoolAbi,
@@ -118,27 +130,24 @@ const Position: NextPage = () => {
     setActivities([]);
     setSupplies([]);
     setLastSyncedBlock(null);
+    setHasInitialSync(false);
   }, [address]);
 
   useEffect(() => {
-    const load = async () => {
+    const runInitialSync = async () => {
       if (!publicClient || !address || !TREASURY_VAULT_ADDRESS) {
         setActivities([]);
         setSupplies([]);
         setLastSyncedBlock(null);
+        setHasInitialSync(false);
         return;
       }
 
       setIsLoadingActivity(true);
 
       try {
-        const latestBlock = blockNumber ?? (await publicClient.getBlockNumber());
-        const fromBlock =
-          lastSyncedBlock === null ? VAULT_DEPLOY_BLOCK : lastSyncedBlock + BigInt(1);
-
-        if (fromBlock > latestBlock) {
-          return;
-        }
+        const latestBlock = await publicClient.getBlockNumber();
+        const fromBlock = VAULT_DEPLOY_BLOCK;
 
         const maxRange = BigInt(9000);
         const depositLogs: Array<any> = [];
@@ -154,14 +163,14 @@ const Position: NextPage = () => {
           const [depositChunk, supplyChunk] = await Promise.all([
             publicClient.getLogs({
               address: TREASURY_VAULT_ADDRESS,
-              event: treasuryVaultAbi[1],
+              event: treasuryVaultAbi[2],
               args: { user: address },
               fromBlock: cursor,
               toBlock,
             }),
             publicClient.getLogs({
               address: TREASURY_VAULT_ADDRESS,
-              event: treasuryVaultAbi[2],
+              event: treasuryVaultAbi[3],
               args: { user: address },
               fromBlock: cursor,
               toBlock,
@@ -187,36 +196,98 @@ const Position: NextPage = () => {
           .filter((item): item is DepositActivity => item !== null)
           .reverse();
 
-        setActivities((prev) => {
-          const combined = [...rows, ...prev];
-          const seen = new Set<string>();
-          return combined.filter((item) => {
-            const key = `${item.txHash}-${item.block.toString()}`;
-            if (seen.has(key)) return false;
-            seen.add(key);
-            return true;
-          });
-        });
+        setActivities(rows);
 
-        setSupplies((prev) => {
-          const next = supplyLogs
+        setSupplies(
+          supplyLogs
+            .map((log) => {
+              const amount = log.args.usdcAmount;
+              if (amount === undefined) return null;
+              return { amount };
+            })
+            .filter((item): item is SupplyActivity => item !== null),
+        );
+
+        setLastSyncedBlock(latestBlock);
+        setHasInitialSync(true);
+      } finally {
+        setIsLoadingActivity(false);
+      }
+    };
+
+    void runInitialSync();
+  }, [address, publicClient]);
+
+  useEffect(() => {
+    const syncIncremental = async () => {
+      if (
+        !hasInitialSync ||
+        !publicClient ||
+        !address ||
+        !TREASURY_VAULT_ADDRESS ||
+        !blockNumber ||
+        lastSyncedBlock === null ||
+        blockNumber <= lastSyncedBlock
+      ) {
+        return;
+      }
+
+      try {
+        const fromBlock = lastSyncedBlock + BigInt(1);
+        const toBlock = blockNumber;
+
+        const [depositChunk, supplyChunk] = await Promise.all([
+          publicClient.getLogs({
+            address: TREASURY_VAULT_ADDRESS,
+            event: treasuryVaultAbi[2],
+            args: { user: address },
+            fromBlock,
+            toBlock,
+          }),
+          publicClient.getLogs({
+            address: TREASURY_VAULT_ADDRESS,
+            event: treasuryVaultAbi[3],
+            args: { user: address },
+            fromBlock,
+            toBlock,
+          }),
+        ]);
+
+        if (depositChunk.length > 0) {
+          const rows: DepositActivity[] = depositChunk
+            .map((log) => {
+              const amount = log.args.nairaAmount;
+              if (amount === undefined) return null;
+              return {
+                amount,
+                txHash: log.transactionHash,
+                block: log.blockNumber,
+              };
+            })
+            .filter((item): item is DepositActivity => item !== null)
+            .reverse();
+          setActivities((prev) => [...rows, ...prev]);
+        }
+
+        if (supplyChunk.length > 0) {
+          const rows = supplyChunk
             .map((log) => {
               const amount = log.args.usdcAmount;
               if (amount === undefined) return null;
               return { amount };
             })
             .filter((item): item is SupplyActivity => item !== null);
-          return [...prev, ...next];
-        });
+          setSupplies((prev) => [...prev, ...rows]);
+        }
 
-        setLastSyncedBlock(latestBlock);
-      } finally {
-        setIsLoadingActivity(false);
+        setLastSyncedBlock(toBlock);
+      } catch {
+        // Avoid hard-failing UI; next block tick retries.
       }
     };
 
-    void load();
-  }, [address, publicClient, blockNumber, lastSyncedBlock]);
+    void syncIncremental();
+  }, [hasInitialSync, publicClient, address, blockNumber, lastSyncedBlock]);
 
   const totalDepositedNaira = useMemo(
     () => activities.reduce((sum, row) => sum + row.amount, BigInt(0)),
@@ -227,20 +298,17 @@ const Position: NextPage = () => {
     () => supplies.reduce((sum, row) => sum + row.amount, BigInt(0)),
     [supplies],
   );
-  const principalUsdc = USE_MOCK_AAVE
-    ? (mockPosition?.[0] ?? BigInt(0))
-    : suppliedPrincipalUsdc;
+  const principalUsdc = suppliedPrincipalUsdc;
   const currentUsdcBalance = USE_MOCK_AAVE
     ? (mockPosition?.[1] ?? BigInt(0))
     : (aTokenBalance ?? BigInt(0));
-  const yieldUsdc = USE_MOCK_AAVE
-    ? (mockPosition?.[2] ?? BigInt(0))
-    : currentUsdcBalance > principalUsdc
-      ? currentUsdcBalance - principalUsdc
-      : BigInt(0);
+  const yieldUsdc =
+    currentUsdcBalance > principalUsdc ? currentUsdcBalance - principalUsdc : BigInt(0);
 
-  const totalBalanceNaira = currentUsdcBalance * NAIRA_PER_USDC;
+  const principalNaira = principalUsdc * NAIRA_PER_USDC;
   const yieldNaira = yieldUsdc * NAIRA_PER_USDC;
+  const pendingNaira = pendingNairaData ?? BigInt(0);
+  const totalBalanceNaira = principalNaira + pendingNaira + yieldNaira;
   const aprPercent = USE_MOCK_AAVE
     ? Number(mockAprBps ?? BigInt(0)) / 100
     : Number(reserveData?.currentLiquidityRate ?? BigInt(0)) / 1e25;
@@ -248,20 +316,23 @@ const Position: NextPage = () => {
   return (
     <div className={styles.pageWrap}>
       <Head>
-        <title>Kwala AutoSave | Position</title>
+        <title>KoboNest | Position</title>
         <meta content="Track your NAIRA deposits and Aave yield." name="description" />
       </Head>
 
       <main className={styles.layout}>
         <header className={styles.topBar}>
           <div>
-            <p className={styles.brandLabel}>Kwala</p>
-            <h1 className={styles.pageTitle}>My Position</h1>
-            <p className={styles.pageSubtitle}>
-              {USE_MOCK_AAVE
-                ? 'Balances are from MockAavePool + on-chain events.'
-                : 'Balances are live from Aave + on-chain events.'}
-            </p>
+            <Image
+              alt="KoboNest"
+              className={styles.brandLogo}
+              height={72}
+              priority
+              src="/kwala-logo.png"
+              width={248}
+            />
+            <h1 className={styles.pageTitle}>KoboNest</h1>
+            <p className={styles.pageSubtitle}>NAIRA stablecoin savings demo</p>
           </div>
           <div className={styles.topBarActions}>
             <Link className={styles.secondaryLink} href="/">
@@ -273,7 +344,7 @@ const Position: NextPage = () => {
 
         <section className={styles.card}>
           <div className={styles.sectionHeader}>
-            <h2>Position Tracking</h2>
+            <h2>Portfolio</h2>
             <p>Network: {chainId ?? TARGET_CHAIN_ID}</p>
           </div>
 
@@ -292,6 +363,14 @@ const Position: NextPage = () => {
                 {formatNumber(Number(formatUnits(totalDepositedNaira, NAIRA_DECIMALS)))} {tokenSymbol}
               </strong>
             </div>
+            {/* <div className={styles.metricsRow}>
+              <span>Pending Conversion</span>
+              <strong>{formatNumber(Number(formatUnits(pendingNaira, NAIRA_DECIMALS)))} {tokenSymbol}</strong>
+            </div> */}
+            {/* <div className={styles.metricsRow}>
+              <span>Principal Earning</span>
+              <strong>{formatNumber(Number(formatUnits(principalNaira, NAIRA_DECIMALS)))} {tokenSymbol}</strong>
+            </div> */}
             <div className={styles.metricsRow}>
               <span>Current Yield</span>
               <strong>
@@ -305,26 +384,22 @@ const Position: NextPage = () => {
               </strong>
             </div>
             <div className={styles.metricsRow}>
-              <span>{USE_MOCK_AAVE ? 'APR (Mock)' : 'APR (Aave Live)'}</span>
+              <span>{USE_MOCK_AAVE ? 'APR' : 'APR'}</span>
               <strong>{formatNumber(aprPercent, 2)}%</strong>
-            </div>
-            <div className={styles.metricsRow}>
-              <span>{USE_MOCK_AAVE ? 'Mock Pool Balance (USDC)' : 'Aave Balance (USDC)'}</span>
-              <strong>{formatNumber(Number(formatUnits(currentUsdcBalance, USDC_DECIMALS)))} USDC</strong>
             </div>
           </div>
 
           <div className={styles.toggleRow}>
             <span>Auto-Invest</span>
             <label className={styles.switch}>
-              <input disabled type="checkbox" />
+              <input checked disabled readOnly type="checkbox" />
               <span className={styles.slider} />
             </label>
           </div>
 
           <div className={styles.buttonRow}>
             <button className={styles.disabledButton} disabled type="button">
-              Withdraw (Disabled)
+              Withdraw
             </button>
           </div>
 

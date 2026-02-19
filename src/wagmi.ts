@@ -5,7 +5,7 @@ const walletConnectProjectId =
   process.env.NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID || 'YOUR_PROJECT_ID';
 
 export const config = getDefaultConfig({
-  appName: 'Kwala AutoSave',
+  appName: 'KoboNest AutoSave',
   projectId: walletConnectProjectId,
   chains: [
     sepolia,

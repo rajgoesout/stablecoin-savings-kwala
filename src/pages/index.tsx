@@ -1,6 +1,7 @@
 import { ConnectButton } from '@rainbow-me/rainbowkit';
 import type { NextPage } from 'next';
 import Head from 'next/head';
+import Image from 'next/image';
 import Link from 'next/link';
 import { FormEvent, useMemo, useState } from 'react';
 import { formatUnits, parseUnits } from 'viem';
@@ -181,7 +182,7 @@ const Home: NextPage = () => {
   return (
     <div className={styles.pageWrap}>
       <Head>
-        <title>Kwala AutoSave | Deposit</title>
+        <title>KoboNest | Deposit</title>
         <meta
           content="Deposit NAIRA into TreasuryVault and track your stablecoin savings position."
           name="description"
@@ -191,13 +192,20 @@ const Home: NextPage = () => {
       <main className={styles.layout}>
         <header className={styles.topBar}>
           <div>
-            <p className={styles.brandLabel}>Kwala</p>
-            <h1 className={styles.pageTitle}>AutoSave Deposit</h1>
-            <p className={styles.pageSubtitle}>Deposit NAIRA, backend handles conversion + Aave supply.</p>
+            <Image
+              alt="KoboNest"
+              className={styles.brandLogo}
+              height={72}
+              priority
+              src="/kwala-logo.png"
+              width={248}
+            />
+            <h1 className={styles.pageTitle}>KoboNest</h1>
+            <p className={styles.pageSubtitle}>NAIRA stablecoin savings demo</p>
           </div>
           <div className={styles.topBarActions}>
             <Link className={styles.secondaryLink} href="/position">
-              Position Tracking
+              Portfolio
             </Link>
             <ConnectButton />
           </div>
@@ -247,23 +255,13 @@ const Home: NextPage = () => {
               <span>Wallet balance (selected network)</span>
               <strong>{formatAmount(balanceData, tokenDecimals)} {tokenSymbol}</strong>
             </div>
-            <div className={styles.metricsRow}>
-              <span>Current allowance</span>
-              <strong>{formatAmount(allowanceData, tokenDecimals)} {tokenSymbol}</strong>
-            </div>
-
-            <div className={styles.flowRow}>
-              <span>{tokenSymbol}</span>
-              <span>Vault</span>
-              <span>Lending</span>
-            </div>
 
             <button className={styles.primaryButton} disabled={!canSubmit} type="submit">
               {isBusy ? 'Processing...' : needsApproval ? 'Approve & Deposit' : 'Deposit'}
             </button>
 
             <button className={styles.disabledButton} disabled type="button">
-              Withdraw (Disabled)
+              Withdraw
             </button>
 
             {parsedAmount !== undefined && !hasEnoughBalance && (

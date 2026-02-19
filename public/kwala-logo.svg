@@ -1,0 +1,22 @@
+<svg width="620" height="180" viewBox="0 0 620 180" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="g1" x1="20" y1="20" x2="190" y2="160" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#6A2CFF"/>
+      <stop offset="1" stop-color="#22004A"/>
+    </linearGradient>
+    <linearGradient id="g2" x1="80" y1="0" x2="210" y2="120" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#7E45FF"/>
+      <stop offset="1" stop-color="#2A0061"/>
+    </linearGradient>
+  </defs>
+
+  <polygon points="20,40 95,5 170,40 95,75" fill="url(#g2)"/>
+  <polygon points="20,40 20,110 95,145 95,75" fill="url(#g1)"/>
+  <polygon points="170,40 170,110 95,145 95,75" fill="#3A0B78"/>
+
+  <polygon points="95,75 135,95 95,115 55,95" fill="#6A2CFF"/>
+  <polygon points="55,95 55,126 95,146 95,115" fill="#2B005D"/>
+  <polygon points="135,95 135,126 95,146 95,115" fill="#4A13A0"/>
+
+  <text x="215" y="112" font-family="Manrope, Avenir Next, Segoe UI, sans-serif" font-size="98" font-weight="800" fill="#120042">kwala</text>
+</svg>
