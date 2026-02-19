@@ -2,6 +2,7 @@
 pragma solidity ^0.8.20;
 
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
 import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import "@openzeppelin/contracts/access/Ownable.sol";
 
@@ -20,6 +21,8 @@ contract TreasuryVault is Ownable {
     IERC20 public immutable naira;
     IERC20 public immutable usdc;
     IAavePool public immutable aavePool;
+    uint8 public immutable nairaDecimals;
+    uint8 public immutable usdcDecimals;
 
     // Hardcoded demo conversion: 1 USDC = 1,350 NAIRA.
     // This assumes NAIRA token uses 6 decimals (same as USDC).
@@ -38,6 +41,8 @@ contract TreasuryVault is Ownable {
         naira = IERC20(_naira);
         usdc = IERC20(_usdc);
         aavePool = IAavePool(_aavePool);
+        nairaDecimals = IERC20Metadata(_naira).decimals();
+        usdcDecimals = IERC20Metadata(_usdc).decimals();
     }
 
     /*
@@ -61,12 +66,18 @@ contract TreasuryVault is Ownable {
     */
     function convertAndSupply(address user, uint256 nairaAmount) external {
         require(user != address(0), "Invalid user");
-        require(nairaAmount > 0, "Invalid amount");
-        require(pendingNaira[user] >= nairaAmount, "Amount exceeds pending deposit");
-        pendingNaira[user] -= nairaAmount;
+        uint256 pending = pendingNaira[user];
+        require(pending > 0, "No pending deposit");
 
-        // With both tokens at 6 decimals, divide only by FX rate.
-        uint256 usdcAmount = nairaAmount / NAIRA_PER_USDC;
+        // If caller passes 0 or too large amount, process full pending backlog.
+        uint256 amountToProcess =
+            (nairaAmount == 0 || nairaAmount > pending) ? pending : nairaAmount;
+        pendingNaira[user] = pending - amountToProcess;
+
+        // Decimals-safe conversion:
+        // usdcAmount = (nairaAmount / NAIRA_PER_USDC) adjusted from NAIRA decimals to USDC decimals.
+        uint256 usdcAmount = (amountToProcess * (10 ** usdcDecimals)) /
+            (NAIRA_PER_USDC * (10 ** nairaDecimals));
         require(usdcAmount > 0, "Amount too small");
 
         require(
